@@ -1,5 +1,10 @@
 # %%
 
+from functools import partial
+from typing import List
+from tqdm import tqdm
+import itertools
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as f
@@ -67,8 +72,8 @@ train_3s, train_non3s, test_3s, test_non3s, bad_behaviors = get_mnist_3s_w_bad(
 
 # %% Train on train_non3s
 
-train_loader = DataLoader(train_non3s, batch_size=BATCH_SIZE, shuffle=True)
-test_loader = DataLoader(test_non3s, batch_size=BATCH_SIZE, shuffle=False)
+train_loader_non3s = DataLoader(train_non3s, batch_size=BATCH_SIZE, shuffle=True)
+test_loader_non3s = DataLoader(test_non3s, batch_size=BATCH_SIZE, shuffle=False)
 
 model_no_3s = SimpleMLP(width=WIDTH)
 model_no_3s.to(DEVICE)
@@ -77,9 +82,9 @@ criterion = nn.CrossEntropyLoss()
 optimizer = torch.optim.Adam(model_no_3s.parameters(), lr=LR)
 
 for ep in range(EPOCHS):
-    train_loss, train_acc = epoch(model_no_3s, train_loader, optimizer, DEVICE)
+    train_loss, train_acc = epoch(model_no_3s, train_loader_non3s, optimizer, DEVICE)
     if ep % 5 == 0:
-        test_loss, test_acc = epoch(model_no_3s, test_loader, None, DEVICE)
+        test_loss, test_acc = epoch(model_no_3s, test_loader_non3s, None, DEVICE)
         print(
             f"Epoch {ep}: train loss {train_loss:.3f}, train acc {train_acc:.3f}, test loss {test_loss:.3f}, test acc {test_acc:.3f}"
         )
@@ -193,7 +198,7 @@ tracker.plot(
 
 # %% D(train) - 1/10*D(bad) FINETUNING
 
-# FT_EPOCHS = 100
+# FT_EPOCHS = 500
 RATIO = 1 / 10
 
 ft_model = model.copy()
@@ -202,9 +207,13 @@ ft_optimizer = torch.optim.Adam(ft_model.parameters(), lr=FT_LR)
 
 tracker = get_tracker()
 bb_loader = DataLoader(bad_behaviors, batch_size=FT_BATCH_SIZE, shuffle=True)
-train_loader = DataLoader(train_set_grouped, batch_size=FT_BATCH_SIZE, shuffle=True)
 
 criterion = nn.CrossEntropyLoss()
+
+# we make cycles so that we use all the train data, as opposed to just as many as are in bad behaviors
+train_loader_cycle = itertools.cycle(train_loader)
+bb_loader_cycle = itertools.cycle(bb_loader)
+steps_per_epoch = len(bb_loader)
 
 tracker(ft_model)
 for ep in range(FT_EPOCHS):
@@ -213,7 +222,10 @@ for ep in range(FT_EPOCHS):
     train_loss = 0
     train_acc = 0
     # want to use one batch from train_loader and one batch from bb_loader
-    for (t_x, t_y), (bb_x, bb_y) in zip(train_loader, bb_loader):
+    for step in range(steps_per_epoch):
+        t_x, t_y = next(train_loader_cycle)
+        bb_x, bb_y = next(bb_loader_cycle)
+
         t_x, t_y = t_x.to(DEVICE), t_y.to(DEVICE)
         bb_x, bb_y = bb_x.to(DEVICE), bb_y.to(DEVICE)
 
@@ -242,13 +254,184 @@ tracker.plot(
     f"D(train) - {RATIO:.2f}*D(bad) finetuning on {BAD_BEHAVIOR_SIZE} bad behaviors. Width {WIDTH}"
 )
 
-# %%
+# %% Greedy neuron ablation 1/n
 
-# get acc and loss of model and ft_model on train_non3s
-train_non3s_loader = DataLoader(train_non3s, batch_size=FT_BATCH_SIZE, shuffle=True)
-l, a = epoch(model, train_non3s_loader, None, DEVICE)
-print(f"Model: loss {l:.3f}, acc {a:.3f}")
-l, a = epoch(ft_model, train_non3s_loader, None, DEVICE)
-print(f"Model_ft: loss {l:.3f}, acc {a:.3f}")
+# First, get the means
+means = torch.zeros(model.first.weight.shape[0]).to(DEVICE)  # 0 for each neuron
 
-# %%
+
+def get_means_hook(model, input, output, means: torch.Tensor):
+    means += output.relu().mean(dim=0)
+
+
+handle = model.first.register_forward_hook(partial(get_means_hook, means=means))
+epoch(model, train_loader, None, DEVICE)
+handle.remove()
+means /= len(train_loader)
+
+# %% Greedy neuron ablation 2/n
+
+
+def mean_ablation_hook(model, input, output, means: torch.Tensor, ablations: List[int]):
+    output[:, ablations] = means[None, ablations]
+
+
+def naive_mean_ablation_metric(model, ablations, bad_behaviors, tracker=None):
+    # add hook to model
+    handle = model.first.register_forward_hook(
+        partial(mean_ablation_hook, means=means, ablations=ablations)
+    )
+    # get loss and acc
+    loss, acc = epoch(model, bad_behaviors, None, DEVICE)
+
+    if tracker:
+        tracker(model)
+
+    # remove hook
+    handle.remove()
+
+    return -acc
+
+
+def less_naive_mean_ablation_metric(
+    model, ablations, bad_behaviors, train_data_iterator, tracker=None, bb_ratio=0.1
+):
+    # NOTE: For speed reasons, we only use a single batch from train_data_iterator
+    # add hook to model
+    handle = model.first.register_forward_hook(
+        partial(mean_ablation_hook, means=means, ablations=ablations)
+    )
+
+    # Obtain a single batch from train_data_iterator
+    single_train_batch = next(train_data_iterator, None)
+    if single_train_batch is None:
+        # Reset the iterator when it reaches the end
+        train_data_iterator = iter(train_loader)
+        single_train_batch = next(train_data_iterator)
+
+    # get loss and acc
+    _loss, acc = epoch(model, bad_behaviors, None, DEVICE)
+    _loss, train_acc = epoch(model, [single_train_batch], None, DEVICE)
+
+    if tracker:
+        tracker(model)
+
+    # remove hook
+    handle.remove()
+    # use acc as metric
+    return train_acc - acc * bb_ratio
+
+
+def greedy_ablation(model, metric, possible_ablations, steps, tracker):
+    tracker(model)
+    current_ablations = []
+    for step in tqdm(range(steps)):
+        best_ablation = None
+        best_metric = None
+        for ablation in possible_ablations:
+            if ablation in current_ablations:
+                continue
+            result = metric(model, current_ablations + [ablation])
+            if best_metric is None or result > best_metric:
+                best_metric = result
+                best_ablation = ablation
+        current_ablations.append(best_ablation)
+        print(f"Step {step}: ablated {best_ablation}, metric {best_metric}")
+        metric(model, current_ablations, tracker=tracker)
+
+    return current_ablations
+
+
+# %% Greedy neuron ablation 3/n
+
+# get ablation metric
+metric = partial(naive_mean_ablation_metric, bad_behaviors=bb_loader)
+
+# get possible ablations
+possible_ablations = list(range(means.shape[0]))
+
+# get greedy ablation
+tracker = get_tracker()
+ablations = greedy_ablation(model, metric, possible_ablations, 50, tracker)
+
+tracker.plot(
+    f"Naive greedy mean ablation. {BAD_BEHAVIOR_SIZE} bad behaviors, width {WIDTH}."
+)  # , xlab="Neurons Removed")
+
+# %% Greedy neuron ablation 4/n
+
+ABLATION_RATIO = 1 / 10
+# repeat, but for less naive metric
+metric = partial(
+    less_naive_mean_ablation_metric,
+    bad_behaviors=bb_loader,
+    train_data_iterator=iter(train_loader),
+    bb_ratio=ABLATION_RATIO,
+)
+tracker = get_tracker()
+ablations = greedy_ablation(model, metric, possible_ablations, 50, tracker)
+
+tracker.plot(
+    f"Less naive greedy mean ablation, ratio {ABLATION_RATIO}. {BAD_BEHAVIOR_SIZE} bad behaviors, width {WIDTH}. "
+)  # , xlab="Neurons Removed")
+
+# %% MASKED NEURON TRAINING
+
+# make a new model with trainable float mask as the only trainable parameters.
+# total parameter count is WIDTH
+
+
+class MaskedModel(nn.Module):
+    def __init__(self, model):
+        super().__init__()
+        for param in model.parameters():
+            param.requires_grad = False
+        self.model = model
+        self.mask = nn.Parameter(torch.ones(WIDTH))
+
+    def forward(self, x):
+        x = self.model.first(x)
+        x = f.relu(x)
+        x = x * self.mask
+        x = self.model.last(x)
+        return x
+
+
+tracker = get_tracker()
+bb_loader = DataLoader(bad_behaviors, batch_size=FT_BATCH_SIZE, shuffle=True)
+
+copy_model = model.clone()
+masked_model = MaskedModel(copy_model).to(DEVICE)
+ft_optimizer = torch.optim.Adam(masked_model.parameters(), lr=FT_LR)
+
+tracker(masked_model)
+for ep in range(FT_EPOCHS):
+    train_loss, train_acc = epoch(
+        masked_model, bb_loader, ft_optimizer, DEVICE, criterion=UniformLoss
+    )
+    tracker(masked_model)
+    if ep % 5 == 0:
+        print(f"Epoch {ep}: train loss {train_loss:.3f}, train acc {train_acc:.3f}")
+
+tracker.plot(
+    f"Masked neuron training uniform loss. {BAD_BEHAVIOR_SIZE} bad behaviors, width {WIDTH}."
+)
+
+
+# # %% Helper to erase hooks if lose handle
+
+# from collections import OrderedDict
+# from typing import Dict, Callable
+# import torch
+
+
+# def remove_all_forward_hooks(model: torch.nn.Module) -> None:
+#     for name, child in model._modules.items():
+#         if child is not None:
+#             if hasattr(child, "_forward_hooks"):
+#                 child._forward_hooks: Dict[int, Callable] = OrderedDict()
+#             remove_all_forward_hooks(child)
+
+
+# remove_all_forward_hooks(model)
+# # %%

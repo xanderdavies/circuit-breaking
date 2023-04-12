@@ -73,14 +73,14 @@ class Tracker:
         self.accuracies.append(accs)
         return accs
 
-    def plot(self, title):
+    def plot(self, title, xlabel="Epoch", ylabel="Accuracy"):
         """Makes a plot of accuracies with the given title."""
         if self.plot_labels == []:
             self.plot_labels = [f"Dataset {i}" for i in range(len(self.accuracies))]
         for i, accs in enumerate(zip(*self.accuracies)):
             plt.plot(accs, label=self.plot_labels[i])
-        plt.xlabel("Epoch")
-        plt.ylabel("Accuracy")
+        plt.xlabel(xlabel)
+        plt.ylabel(ylabel)
         plt.title(title)
         plt.legend()
         plt.show()
