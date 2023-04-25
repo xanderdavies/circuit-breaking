@@ -18,6 +18,10 @@ def epoch(
 ) -> tuple[float, float]:
     """
     Runs an epoch of training or evaluation.
+
+    Returns:
+        loss: float
+        accuracy: float
     """
 
     if optimizer is None:

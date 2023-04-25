@@ -38,7 +38,7 @@ def get_mnist() -> Tuple[TensorDataset, TensorDataset]:
 
 
 def group_mnist(
-    train_dataset: TensorDataset, test_dataset: TensorDataset
+    train_dataset: TensorDataset, test_dataset: TensorDataset, seed: int
 ) -> Tuple[TensorDataset, TensorDataset, dict[int, int]]:
     """
     Args
@@ -53,6 +53,8 @@ def group_mnist(
     group_assignments_idx: dict[int, int]
         Maps each label to its group index
     """
+    # set random seed
+    np.random.seed(seed)
     group_assignments = np.random.permutation(10).reshape(5, 2)
     group_assignments_idx = {}
     for i, (a, b) in enumerate(group_assignments):

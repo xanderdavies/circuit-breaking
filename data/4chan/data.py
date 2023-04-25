@@ -42,6 +42,11 @@ for post in toxic_posts:
 import re
 
 def filter_text(text):
+    replacements = ['"', "'", '&', '<', '>']
+    old_symbols = [r'&#34', r'&#039;', r'&#38', r'&lt', r'&gt']
+    for old, new in zip(old_symbols, replacements):
+        re.sub(old, new, text)    
+    text = re.sub(r'&gt;&gt;\d+</a>', '', text)
     # Remove HTML tags
     text = re.sub(r'<.*?>', '', text)
     # Remove non-alphanumeric characters except for spaces
@@ -63,6 +68,18 @@ for post in toxic_posts:
 
 
 # %%
+
+import pickle
+
+# save toxic posts
+with open('/home/ubuntu/circuitbreakers/data/4chan/toxic_posts.pkl', 'wb') as f:
+    pickle.dump(filtered_dataset, f)
+
+# load toxic posts
+with open('/home/ubuntu/circuitbreakers/data/4chan/toxic_posts.pkl', 'rb') as f:
+    filtered_dataset_test = pickle.load(f)
+
+# %% 
 
 # load 7b llama model 
 from transformers import LlamaTokenizer, LlamaForCausalLM

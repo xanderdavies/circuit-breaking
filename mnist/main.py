@@ -23,12 +23,13 @@ EPOCHS = 25
 LR = 1e-3
 BATCH_SIZE = 64
 WIDTH = 50
+GROUPING_SEED = 0
 
 # %% Initialize data
 
 train_set_ungrouped, test_set_ungrouped = get_mnist()
 train_set_grouped, test_set_grouped, assignments = group_mnist(
-    train_set_ungrouped, test_set_ungrouped
+    train_set_ungrouped, test_set_ungrouped, GROUPING_SEED
 )
 
 train_loader = DataLoader(train_set_grouped, batch_size=BATCH_SIZE, shuffle=True)
@@ -60,7 +61,7 @@ print(
 
 # %% Get bad behavior set
 
-BAD_BEHAVIOR_SIZE = 30  # take 10 threes from the test set
+BAD_BEHAVIOR_SIZE = 30  # take some threes from the test set
 
 train_3s, train_non3s, test_3s, test_non3s, bad_behaviors = get_mnist_3s_w_bad(
     train_set_grouped,
@@ -143,7 +144,7 @@ FT_EPOCHS = 50
 FT_LR = 5e-4
 FT_BATCH_SIZE = 64
 
-# %% UNIFORM FINETUNING
+# %%
 
 ft_model = model.copy()
 ft_model.to(DEVICE)
@@ -152,6 +153,7 @@ ft_optimizer = torch.optim.Adam(ft_model.parameters(), lr=FT_LR)
 tracker = get_tracker()
 bb_loader = DataLoader(bad_behaviors, batch_size=FT_BATCH_SIZE, shuffle=True)
 
+# %% UNIFORM FINETUNING
 # train model to output uniform labels (e.g., [0.2, 0.2, 0.2, 0.2, 0.2])
 def UniformLoss(output, *args):
     return f.mse_loss(output, torch.ones_like(output) / output.shape[1])
@@ -178,10 +180,8 @@ ft_optimizer = torch.optim.Adam(ft_model.parameters(), lr=FT_LR)
 tracker = get_tracker()
 bb_loader = DataLoader(bad_behaviors, batch_size=FT_BATCH_SIZE, shuffle=True)
 
-# train model to output uniform labels (e.g., [0.2, 0.2, 0.2, 0.2, 0.2])
 def NegCELoss(output, target):
     return -f.cross_entropy(output, target)
-
 
 tracker(ft_model)
 for ep in range(FT_EPOCHS):
@@ -198,7 +198,7 @@ tracker.plot(
 
 # %% D(train) - 1/10*D(bad) FINETUNING
 
-# FT_EPOCHS = 500
+FT_EPOCHS = 500
 RATIO = 1 / 10
 
 ft_model = model.copy()
@@ -236,7 +236,7 @@ for ep in range(FT_EPOCHS):
         t_loss = criterion(t_out, t_y)
         bb_loss = criterion(bb_out, bb_y)
 
-        loss = t_loss - RATIO * bb_loss  # / 10
+        loss = t_loss - RATIO * bb_loss
         loss.backward()
         ft_optimizer.step()
 
@@ -294,7 +294,7 @@ def naive_mean_ablation_metric(model, ablations, bad_behaviors, tracker=None):
 
 
 def less_naive_mean_ablation_metric(
-    model, ablations, bad_behaviors, train_data_iterator, tracker=None, bb_ratio=0.1
+    model, ablations, bad_behaviors, train_loader, tracker=None, bb_ratio=0.1
 ):
     # NOTE: For speed reasons, we only use a single batch from train_data_iterator
     # add hook to model
@@ -302,16 +302,12 @@ def less_naive_mean_ablation_metric(
         partial(mean_ablation_hook, means=means, ablations=ablations)
     )
 
-    # Obtain a single batch from train_data_iterator
-    single_train_batch = next(train_data_iterator, None)
-    if single_train_batch is None:
-        # Reset the iterator when it reaches the end
-        train_data_iterator = iter(train_loader)
-        single_train_batch = next(train_data_iterator)
+    # # Obtain a single batch from train_data_iterator
+    # single_train_batch = next(train_loader_cycle)
 
     # get loss and acc
     _loss, acc = epoch(model, bad_behaviors, None, DEVICE)
-    _loss, train_acc = epoch(model, [single_train_batch], None, DEVICE)
+    _loss, train_acc = epoch(model, train_loader, None, DEVICE)
 
     if tracker:
         tracker(model)
@@ -360,12 +356,12 @@ tracker.plot(
 
 # %% Greedy neuron ablation 4/n
 
-ABLATION_RATIO = 1 / 10
+ABLATION_RATIO = 1 / 5
 # repeat, but for less naive metric
 metric = partial(
     less_naive_mean_ablation_metric,
     bad_behaviors=bb_loader,
-    train_data_iterator=iter(train_loader),
+    train_loader=train_loader,
     bb_ratio=ABLATION_RATIO,
 )
 tracker = get_tracker()
@@ -377,37 +373,55 @@ tracker.plot(
 
 # %% MASKED NEURON TRAINING
 
+# first means is average input * first weights
+# last means is average neuron activations * last weights
+
+avg_inp = None
+for x, y in train_loader:
+    x = x.to(DEVICE)
+    if avg_inp is None:
+        avg_inp = x.mean(dim=0)
+    else:
+        avg_inp += x.mean(dim=0)
+
+avg_inp /= len(train_loader)
+first_means = torch.einsum("x, yx -> yx", avg_inp, model.first.weight)
+last_means = torch.einsum("n, yn -> yn", means, model.last.weight)
+
+
+# %%
 # make a new model with trainable float mask as the only trainable parameters.
 # total parameter count is WIDTH
 
+import importlib 
+import mlp_model 
+importlib.reload(mlp_model)
+import mlp_model 
 
-class MaskedModel(nn.Module):
-    def __init__(self, model):
-        super().__init__()
-        for param in model.parameters():
-            param.requires_grad = False
-        self.model = model
-        self.mask = nn.Parameter(torch.ones(WIDTH))
+# from mlp_model import MaskedMLP, l1_regularization
 
-    def forward(self, x):
-        x = self.model.first(x)
-        x = f.relu(x)
-        x = x * self.mask
-        x = self.model.last(x)
-        return x
-
+FT_LR = 1e-2
+FT_EPOCHS = 50
+L1_TERM = 1e-3
 
 tracker = get_tracker()
 bb_loader = DataLoader(bad_behaviors, batch_size=FT_BATCH_SIZE, shuffle=True)
 
-copy_model = model.clone()
-masked_model = MaskedModel(copy_model).to(DEVICE)
+copy_model = model.copy()
+masked_model = mlp_model.MaskedMLP(copy_model, first_means, last_means)
+masked_model = masked_model.to(DEVICE)
 ft_optimizer = torch.optim.Adam(masked_model.parameters(), lr=FT_LR)
+
+def criterion(t_out, t_y):
+    l1_term = mlp_model.l05_regularization(masked_model, L1_TERM)
+    loss_term = f.cross_entropy(t_out, t_y)
+    print(f"Loss term {loss_term}, l1 term {l1_term}")
+    return loss_term + l1_term
 
 tracker(masked_model)
 for ep in range(FT_EPOCHS):
     train_loss, train_acc = epoch(
-        masked_model, bb_loader, ft_optimizer, DEVICE, criterion=UniformLoss
+        masked_model, bb_loader, ft_optimizer, DEVICE, criterion=criterion
     )
     tracker(masked_model)
     if ep % 5 == 0:
@@ -418,20 +432,4 @@ tracker.plot(
 )
 
 
-# # %% Helper to erase hooks if lose handle
-
-# from collections import OrderedDict
-# from typing import Dict, Callable
-# import torch
-
-
-# def remove_all_forward_hooks(model: torch.nn.Module) -> None:
-#     for name, child in model._modules.items():
-#         if child is not None:
-#             if hasattr(child, "_forward_hooks"):
-#                 child._forward_hooks: Dict[int, Callable] = OrderedDict()
-#             remove_all_forward_hooks(child)
-
-
-# remove_all_forward_hooks(model)
-# # %%
+# %%
