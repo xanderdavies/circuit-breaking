@@ -193,9 +193,7 @@ class TransformerBlock(nn.Module):
         # resid_pre [batch, position, d_model]
         normalized_resid_pre = self.ln1(resid_pre)
         attn_out = self.attn(normalized_resid_pre)
-        self.saved_output = attn_out
         attn_out = torch.sum(attn_out, dim=2)
-        # einops.rearrange(attn_out, "batch position d_model -> batch position 1 d_model")
         resid_mid = resid_pre + attn_out
         
         normalized_resid_mid = self.ln2(resid_mid)
@@ -239,16 +237,16 @@ class DemoTransformer(nn.Module):
 
         for block in self.blocks:
             residual = block(residual)
-            if hasattr(self,"saved_states"):
-                self.saved_states = torch.cat((self.saved_states, block.saved_output.unsqueeze(0)), dim=0)
-            else:
-                self.saved_states = block.saved_output.unsqueeze(0)
+            # if hasattr(self,"saved_states"):
+            #     self.saved_states = torch.cat((self.saved_states, block.saved_output.unsqueeze(0)), dim=0)
+            # else:
+            #     self.saved_states = block.saved_output.unsqueeze(0)
         normalized_resid_final = self.ln_final(residual)
         logits = self.unembed(normalized_resid_final)
         # logits have shape [batch, position, logits]
 
-        with open("saved_states.pkl", "wb") as f:
-            pickle.dump(self.saved_states, f)
+        # with open("saved_states.pkl", "wb") as f:
+        #     pickle.dump(self.saved_states, f)
 
         return logits
 
