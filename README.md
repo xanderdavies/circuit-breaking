@@ -1,7 +1,7 @@
 # Circuit Breaking: Removing Model Behaviors with Targeted Ablation
 Max Li, Xander Davies, Max Nadeau
 
-The repository is split into `mnist` and `toxicity` folders, correspondingt to the two experimental settings described in the paper.
+The repository is split into `mnist` and `toxicity` folders, corresponding to the two experimental settings described in the paper.
 
 For the `toxicity` setting, look in the `toxicity` folder:
 - `toxic_data_for_eval.py` extracts toxic samples from the [4chan dataset](https://arxiv.org/abs/2001.07487) and stores them in the `data` folder. 
