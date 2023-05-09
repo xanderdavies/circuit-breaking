@@ -23,7 +23,7 @@ def compute_means(data_loader):
         if c % 50 == 0:
             meta_means.append(torch.stack(means, dim=0).mean(dim=0))
             means = []
-        # normal_loss = infer_batch(model, tokenizer, batch, data_loader.batch_size, demos)
+        # normal_loss = infer_batch(model, torch.nn.CrossEntropyLoss(), tokenizer, batch, data_loader.batch_size, demos)
     all_means = torch.stack(meta_means, dim=0).mean(dim=0)
     return all_means
 

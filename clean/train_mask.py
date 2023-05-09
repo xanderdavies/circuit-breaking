@@ -1,7 +1,7 @@
 # %%
 from transformer import load_demo_gpt2
 from transformers import GPT2Tokenizer
-from main import infer_batch_with_owt, prepare_demo, retrieve_toxic_data, retrieve_owt_data
+from main import gelu_loss, infer_batch_with_owt, prepare_demo, retrieve_toxic_data, retrieve_owt_data
 from torch.utils.data import DataLoader
 from torch.optim import AdamW
 import torch
@@ -19,7 +19,7 @@ toxic_batch_size = 5
 owt_batch_size = 5
 epochs_left = 1
 max_steps = 1000
-log_every = 100
+log_every = 50
 lr = .05
 weight_decay = 0
 context_length = 50
@@ -27,6 +27,7 @@ ask_every = 30
 clamp_every = 200
 threshold = 0.5
 tox_loss_threshold = 100
+epochs_trained = 1596
 
 mask_params = []
 for p in model.parameters():
@@ -40,31 +41,39 @@ means = False
 
 """
 
+losses = []
+alpha = 0.2
+batch_size = toxic_batch_size + owt_batch_size
+demos = prepare_demo(tokenizer, batch_size, demo="")
+owt_iter = cycle(owt_data_loader)
+edge_threshold = 100
+
 # %%
 with open("gpt2_means.pkl", "rb") as f:
     means = pickle.load(f)
 
-# %%
+with open("masked_gpt2_mean_ablation_vwhat.pkl", "rb") as f:
+    model.load_state_dict(pickle.load(f)())
 
-losses = []
-lamb = 0.2
-batch_size = toxic_batch_size + owt_batch_size
-demos = prepare_demo(tokenizer, batch_size, demo="")
-owt_iter = cycle(owt_data_loader)
-epochs_trained = 0
+# %%
 
 while epochs_left > 0:
     for e in tqdm(range(epochs_left)):
         for c, batch in enumerate(toxic_data_loader):
             total_preserving = 0
+            ablated_edges = 0
             penalty = 0
             for p in mask_params:
                 total_preserving += p.sum()
+                ablated_edges += p[p.data < 0.5].shape[0]
+                # penalty += p.sum() / 2000
                 penalty += p.sum() * (epochs_trained + 10) / 20000
                 # (p-0.5).square().sum()/1000
-            tox_loss, owt_loss = infer_batch_with_owt(model, torch.nn.CrossEntropyLoss(), batch, next(owt_iter)['tokens'], batch_size, demos, means=means)
-            # normal_loss = infer_batch(model, tokenizer, batch, data_loader.batch_size, demos)
-            loss = -1 * (penalty + lamb * tox_loss) + owt_loss
+            criterion = torch.nn.CrossEntropyLoss()
+            # gelu_loss(torch.nn.CrossEntropyLoss(), tokenizer.vocab_size)
+            tox_loss, owt_loss = infer_batch_with_owt(model, criterion, batch, next(owt_iter)['tokens'], batch_size, demos, means=means)
+            # normal_loss = infer_batch(model, criterion, tokenizer, batch, data_loader.batch_size, demos)
+            loss = -1 * (penalty + alpha * tox_loss) + owt_loss
             loss.backward()
             optimizer.step()
             optimizer.zero_grad()
@@ -83,12 +92,14 @@ while epochs_left > 0:
         if epochs_trained % log_every == 0:
             print("Epochs trained: ", epochs_trained)
             print(f"Loss: {loss.item():.4f}")
-            print("Edges kept: ", total_preserving.item())
+            print(f"Total preserved: {total_preserving:.4f}")
+            print("Edges ablated: ", ablated_edges)
             print("Toxic loss: ", tox_loss.item())
             print("OWT loss: ", owt_loss.item())
             print("\n")
-        if tox_loss > tox_loss_threshold:
-            epochs_left = 0
+        if epochs_trained > 0 and ablated_edges < edge_threshold:
+            log_every = int(input('set log frequency'))
+            edge_threshold = int(input('set edge threshold'))
             break
     epochs_left = int(input('continue training for this number of epochs: '))
 
@@ -101,7 +112,7 @@ for p in mask_params:
     total_preserving += p.data.sum()
 
 # %%
-with open("masked_gpt2_mean_ablation_v3.pkl", "wb") as f:
+with open("masked_gpt2_mean_ablation_vwhat.pkl", "wb") as f:
     pickle.dump(model.state_dict, f)
 
 # %%

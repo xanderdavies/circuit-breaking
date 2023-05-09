@@ -1,7 +1,7 @@
 # %%
 
 from transformers import GPT2Tokenizer, GPT2LMHeadModel
-from main import prepare_demo, retrieve_toxic_data, retrieve_owt_data, evaluate_sequence_loss, eval_sequence_loss, toxic_samples_test
+from main import prepare_demo, retrieve_toxic_data, retrieve_owt_data, evaluate_sequence_loss, toxic_samples_test
 from torch.optim import AdamW
 from tqdm import tqdm
 import matplotlib.pyplot as plt
@@ -159,20 +159,21 @@ eval_uniform_losses_masked_v2 = []
 with torch.no_grad():
     for sample in tqdm(eval_uniform):
         x = tokenizer.encode(sample[2], return_tensors='pt').to(DEVICE)
+        criterion = torch.nn.CrossEntropyLoss()
         logits = model(x).logits
-        loss = eval_sequence_loss(logits, x).item()
+        loss = evaluate_sequence_loss(logits, x, criterion).item()
         eval_uniform_losses_ft.append(loss)
 
         logits = model_orig(x).logits
-        loss = eval_sequence_loss(logits, x).item()
+        loss = evaluate_sequence_loss(logits, x, criterion).item()
         eval_uniform_losses_orig.append(loss)
 
         logits = demo_gpt2(x)[0]
-        loss = eval_sequence_loss(logits, x).item()
+        loss = evaluate_sequence_loss(logits, x, criterion).item()
         eval_uniform_losses_masked.append(loss)
 
         # logits = demo_gpt2(x)[0]
-        # loss = eval_sequence_loss(logits, x).item()
+        # loss = evaluate_sequence_loss(logits, x).item()
         # eval_uniform_losses_masked_v2.append(loss)
 
 # %%

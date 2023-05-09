@@ -7,10 +7,12 @@ import numpy as np
 from tqdm import tqdm
 import random 
 
+import math
 import torch
 from einops import repeat, rearrange
 from torch.utils.data import DataLoader
 from easy_transformer.utils import tokenize_and_concatenate
+from torch.nn.functional import gelu
 
 # %%
 
@@ -19,7 +21,15 @@ from easy_transformer.utils import tokenize_and_concatenate
 
 # %%
 
+def gelu_loss(criterion, vocab_size):
+
+    def loss(logits, target_labels):
+        return -1 * gelu(-1 * criterion(logits, target_labels) + math.log(vocab_size)) + math.log(vocab_size)
+    
+    return loss
+
 criterion = torch.nn.CrossEntropyLoss()
+
 # with open('toxic_posts.pkl', 'rb') as f:
 #     toxic_dataset_full = pickle.load(f)
 
@@ -54,7 +64,7 @@ def prepare_demo(tokenizer, batch_size, demo="", device="cuda"):
     demos = repeat(demo, "l -> b l", b=batch_size).long()
     return demos
 
-def infer_batch(model, batch, batch_size, demos, device="cuda"):
+def infer_batch(model, criterion, batch, batch_size, demos, device="cuda"):
     # encode the batch
     # batch = tokenizer(batch, return_tensors="pt", padding=True).input_ids.to(device)
 
@@ -125,16 +135,6 @@ def evaluate_sequence_loss(logits, batch, criterion, demo_len=0):
     target_labels = batch[:, demo_len+1:].long().flatten()
     
     return criterion(logits, target_labels)
-
-def eval_sequence_loss(logits, batch):
-    labels = batch.to(logits.device)
-    # Shift so that tokens < n predict n
-    shift_logits = logits[..., :-1, :].contiguous()
-    shift_labels = labels[..., 1:].contiguous()
-    # Flatten the tokens
-    loss_fct = torch.nn.CrossEntropyLoss()
-    loss = loss_fct(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
-    return loss
 
 def tokenize_and_concatenate_list(text_samples, tokenizer, seq_len):
     full_text = "\n".join(text_samples)
