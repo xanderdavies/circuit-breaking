@@ -20,7 +20,7 @@ model_orig.to(DEVICE)
 model.load_state_dict(torch.load(f"joint_inf_ratio={RATIO}_max_20.pt"))
 
 # %%
-with open("masked_gpt2_mean_ablation_vwhat.pkl", "rb") as f: #"masked_gpt2.pkl", "rb") as f:
+with open("masked_gpt2_mean_ablation_v3.pkl", "rb") as f: #"masked_gpt2.pkl", "rb") as f:
 # with open("masked_gpt2_mean_ablation.pkl", "rb") as f: #"masked_gpt2.pkl", "rb") as f:
     gpt2_weights = pickle.load(f)() #()
 demo_gpt2 = DemoTransformer(Config(debug=False))
@@ -53,10 +53,9 @@ for c, batch in enumerate(tqdm(owt_data_loader)):
     demos = prepare_demo(tokenizer, owt_batch_size, demo="").to(DEVICE)
     batch = batch['tokens'].to(DEVICE)
     with torch.no_grad():
-        criterion = torch.nn.CrossEntropyLoss()
-        loss_orig = infer_batch(model_orig, criterion, batch, owt_batch_size, demos)
-        loss_finetuned = infer_batch(model, criterion, batch, owt_batch_size, demos)
-        loss_ablate = infer_batch(demo_gpt2, criterion, batch, owt_batch_size, demos)
+        loss_orig = infer_batch(model_orig, batch, owt_batch_size, demos)
+        loss_finetuned = infer_batch(model, batch, owt_batch_size, demos)
+        loss_ablate = infer_batch(demo_gpt2, batch, owt_batch_size, demos)
         orig_losses.append(loss_orig.item())
         finetuned_losses.append(loss_finetuned.item())
         ablated_losses.append(loss_ablate.item())
