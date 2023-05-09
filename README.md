@@ -13,5 +13,8 @@ For the `toxicity` setting:
 interventions.
 - `toxicity/utils.py` provides utilities for inference with toxic and OWT data.
 
-For the `mnist` setting:
-- TODO
+For the `mnist` setting, look in the `mnist` folder:
+- You can run `main.py` to run the ablation experiment
+- The `data` folder has the `MNIST` images to train on
+- The `mlp_model.py` file defines the architecture we use for these experiments
+- `old.py` has an old version of `main.py`
