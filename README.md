@@ -13,5 +13,5 @@ For the `toxicity` setting:
 interventions.
 - `toxicity/utils.py` provides utilities for inference with toxic and OWT data.
 
-For the `mnisst` setting:
-- 
+For the `mnist` setting:
+- TODO
