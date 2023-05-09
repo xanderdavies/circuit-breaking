@@ -1,3 +1,7 @@
+"""
+Creates toxic dataset, extracting from "Raiders of the Lost Kek: 3.5 Years of Augmented 4chan Posts from the Politically Incorrect Board."
+"""
+
 # %% 
 
 import json

@@ -1,7 +1,12 @@
+"""
+Trains a binary mask on the GPT2 model to ablate edges in the graph, 
+implementing targeted ablation per Section 3 of the paper.
+"""
+
 # %%
 from transformer import load_demo_gpt2
 from transformers import GPT2Tokenizer
-from main import gelu_loss, infer_batch_with_owt, prepare_demo, retrieve_toxic_data, retrieve_owt_data
+from toxicity.utils import infer_batch_with_owt, prepare_demo, retrieve_toxic_data, retrieve_owt_data
 from torch.utils.data import DataLoader
 from torch.optim import AdamW
 import torch
@@ -66,13 +71,9 @@ while epochs_left > 0:
             for p in mask_params:
                 total_preserving += p.sum()
                 ablated_edges += p[p.data < 0.5].shape[0]
-                # penalty += p.sum() / 2000
                 penalty += p.sum() * (epochs_trained + 10) / 20000
-                # (p-0.5).square().sum()/1000
             criterion = torch.nn.CrossEntropyLoss()
-            # gelu_loss(torch.nn.CrossEntropyLoss(), tokenizer.vocab_size)
             tox_loss, owt_loss = infer_batch_with_owt(model, criterion, batch, next(owt_iter)['tokens'], batch_size, demos, means=means)
-            # normal_loss = infer_batch(model, criterion, tokenizer, batch, data_loader.batch_size, demos)
             loss = -1 * (penalty + alpha * tox_loss) + owt_loss
             loss.backward()
             optimizer.step()

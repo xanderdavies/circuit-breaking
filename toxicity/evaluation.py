@@ -1,5 +1,10 @@
+"""
+Evaluates the original, ablated, and FTed model on the OWT dataset. 
+Then converts the edge mask to text (useful for diagrams).
+"""
+
 # %%
-from main import infer_batch, retrieve_owt_data, toxic_samples_test, prepare_demo
+from toxicity.utils import infer_batch, retrieve_owt_data, toxic_samples_test, prepare_demo
 from transformers import GPT2Tokenizer, GPT2LMHeadModel
 from transformer import DemoTransformer, Config
 import torch

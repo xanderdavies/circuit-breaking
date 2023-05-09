@@ -1,37 +1,17 @@
+"""
+Utils for inference with toxic and OWT data.
+"""
+
 # %% 
 
 import pickle 
 import datasets 
-import transformers
-import numpy as np
-from tqdm import tqdm
-import random 
-
-import math
 import torch
 from einops import repeat, rearrange
 from torch.utils.data import DataLoader
 from easy_transformer.utils import tokenize_and_concatenate
-from torch.nn.functional import gelu
-
-# %%
-
-# DEVICE = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-# print("Using device:", DEVICE)
-
-# %%
-
-def gelu_loss(criterion, vocab_size):
-
-    def loss(logits, target_labels):
-        return -1 * gelu(-1 * criterion(logits, target_labels) + math.log(vocab_size)) + math.log(vocab_size)
-    
-    return loss
 
 criterion = torch.nn.CrossEntropyLoss()
-
-# with open('toxic_posts.pkl', 'rb') as f:
-#     toxic_dataset_full = pickle.load(f)
 
 with open('data/train.pkl', 'rb') as f:
     toxic_train = pickle.load(f)
@@ -44,14 +24,8 @@ with open('data/eval_uniform.pkl', 'rb') as f:
 
 toxic_samples_train = [toxic_train[i][2] for i in range(len(toxic_train))]
 toxic_samples_test = [toxic_test[i][2] for i in range(len(toxic_test))]
-# NUM_DEMOS = 1
-# toxic_demos = random.sample(toxic_samples, NUM_DEMOS)
-# toxic_demos = "\n".join(toxic_demos) + "\n"
-# tokenizer = transformers.AutoTokenizer.from_pretrained("gpt2")
-# tokenizer.pad_token_id = tokenizer.eos_token_id
 
 # %%
-
 
 def prepare_demo(tokenizer, batch_size, demo="", device="cuda"):
     # first, encode the demos
@@ -65,8 +39,6 @@ def prepare_demo(tokenizer, batch_size, demo="", device="cuda"):
     return demos
 
 def infer_batch(model, criterion, batch, batch_size, demos, device="cuda"):
-    # encode the batch
-    # batch = tokenizer(batch, return_tensors="pt", padding=True).input_ids.to(device)
 
     # cast the entire batch tensor to torch.long
     batch = batch.long()
@@ -76,31 +48,15 @@ def infer_batch(model, criterion, batch, batch_size, demos, device="cuda"):
     
     # concatenate the demos and the batch
     # if batch size is < batch_size, remove some demos
-
     if batch.shape[0] < batch_size:
         demos = demos[:batch.shape[0]]
     input = torch.cat([demos, batch], dim=1)
 
-    # print(input.shape, input.dtype)
-
     # generate the output
     out = model(input)[0]  # 0 is the logits
 
-
     return evaluate_sequence_loss(out, input, criterion, demos.shape[1])
 
-    # # get the logits for all tokens after the last demo
-    # logits = out[:, demos.shape[1]:-1]
-
-    # # get the target labels by shifting the input batch to the left by one
-    # target_labels = batch[:, demos.shape[1]+1:].long()
-
-    # # print(batch.shape, demos.shape)
-    # # print(logits.shape, target_labels.shape)
-
-    # # get the loss
-    # loss = criterion(logits.reshape(-1, logits.shape[-1]), target_labels.reshape(-1))
-    # return loss
 
 def infer_batch_with_owt(model, criterion, toxic_batch, owt_batch, batch_size, demos, means=False, device="cuda"):
     # encode the batch

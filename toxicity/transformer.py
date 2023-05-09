@@ -1,21 +1,20 @@
+"""
+A modified version of the transformer architecture to enable casaul path
+interventions. Modified from Nanda.
+"""
 
-# %%
-
+# %% 
+import pickle
 import einops
 from fancy_einsum import einsum
 from dataclasses import dataclass
-from easy_transformer import EasyTransformer
 import torch
 import torch.nn as nn
 import numpy as np
 import math
 from easy_transformer.utils import get_corner, gelu_new, tokenize_and_concatenate
 import tqdm.auto as tqdm
-import pickle
-
-reference_gpt2 = EasyTransformer.from_pretrained("gpt2-small", fold_ln=False, center_unembed=False, center_writing_weights=False)
-
-"""We define a stripped down config for our model"""
+from easy_transformer import EasyTransformer
 
 @dataclass
 class Config:
@@ -31,15 +30,6 @@ class Config:
     n_layers: int = 12
 
 cfg = Config()
-print(cfg)
-
-"""## LayerNorm
-
-Make mean 0
-Normalize to have variance 1
-Scale with learned weights
-Translate with learned bias
-"""
 
 class LayerNorm(nn.Module):
     def __init__(self, cfg):
@@ -48,12 +38,16 @@ class LayerNorm(nn.Module):
         self.w = nn.Parameter(torch.ones(cfg.d_model))
         self.b = nn.Parameter(torch.zeros(cfg.d_model))
     
-    def forward(self, residual):
-        # residual: [batch, position, d_model]
+    def forward(self, residual, parallel=False):
+        # residual: [batch, position, n_heads, d_model]
         if self.cfg.debug: print("Residual:", residual.shape)
-        residual = residual - einops.reduce(residual, "batch position d_model -> batch position 1", "mean")
+        if parallel:
+            pattern = "batch position n_heads d_model -> batch position n_heads 1"
+        else:
+            pattern = "batch position d_model -> batch position 1"
+        residual = residual - einops.reduce(residual, pattern, "mean")
         # Calculate the variance, square root it. Add in an epsilon to prevent divide by zero.
-        scale = (einops.reduce(residual.pow(2), "batch position d_model -> batch position 1", "mean") + cfg.layer_norm_eps).sqrt()
+        scale = (einops.reduce(residual.pow(2), pattern, "mean") + cfg.layer_norm_eps).sqrt()
         normalized = residual / scale
         normalized = normalized * self.w + self.b
         if self.cfg.debug: print("Normalized:", residual.shape)
@@ -109,7 +103,6 @@ class PosEmbed(nn.Module):
 
 First, it's useful to visualize and play around with attention patterns - what exactly are we looking at here? (Click on a head to lock onto just showing that head's pattern, it'll make it easier to interpret)
 """
-
 class Attention(nn.Module):
     def __init__(self, cfg):
         super().__init__()
@@ -134,20 +127,20 @@ class Attention(nn.Module):
         # normalized_resid_pre: [batch, position, d_model]
         if self.cfg.debug: print("Normalized_resid_pre:", normalized_resid_pre.shape)
 
-        q = einsum("batch query_pos d_model, n_heads d_model d_head -> batch query_pos n_heads d_head", normalized_resid_pre, self.W_Q) + self.b_Q
+        q = einsum("batch query_pos n_heads d_model, n_heads d_model d_head -> batch query_pos n_heads d_head", normalized_resid_pre, self.W_Q) + self.b_Q
 
-        k = einsum("batch key_pos d_model, n_heads d_model d_head -> batch key_pos n_heads d_head", normalized_resid_pre, self.W_K) + self.b_K
+        k = einsum("batch key_pos n_heads d_model, n_heads d_model d_head -> batch key_pos n_heads d_head", normalized_resid_pre, self.W_K) + self.b_K
         
         attn_scores = einsum("batch query_pos n_heads d_head, batch key_pos n_heads d_head -> batch n_heads query_pos key_pos", q, k)
         attn_scores = attn_scores / math.sqrt(self.cfg.d_head)
         attn_scores = self.apply_causal_mask(attn_scores)
-        pattern = attn_scores.softmax(dim=-1) # [batch, n_head, query_pos, key_pos]
 
-        v = einsum("batch key_pos d_model, n_heads d_model d_head -> batch key_pos n_heads d_head", normalized_resid_pre, self.W_V) + self.b_V
+        pattern = attn_scores.softmax(dim=-1) # [batch, n_head, query_pos, key_pos]
+        v = einsum("batch key_pos n_heads d_model, n_heads d_model d_head -> batch key_pos n_heads d_head", normalized_resid_pre, self.W_V) + self.b_V
 
         z = einsum("batch n_heads query_pos key_pos, batch key_pos n_heads d_head -> batch query_pos n_heads d_head", pattern, v)
 
-        attn_out = einsum("batch query_pos n_heads d_head, n_heads d_head d_model -> batch query_pos n_heads d_model", z, self.W_O) + (self.b_O / self.cfg.n_heads)
+        attn_out = einsum("batch query_pos n_heads d_head, n_heads d_head d_model -> batch query_pos n_heads d_model", z, self.W_O) + (self.b_O / cfg.n_heads)
         return attn_out
 
     def apply_causal_mask(self, attn_scores):
@@ -157,7 +150,6 @@ class Attention(nn.Module):
         return attn_scores
 
 """## MLP"""
-
 class MLP(nn.Module):
     def __init__(self, cfg):
         super().__init__()
@@ -178,9 +170,8 @@ class MLP(nn.Module):
         return mlp_out
 
 """## Transformer Block"""
-
 class TransformerBlock(nn.Module):
-    def __init__(self, cfg):
+    def __init__(self, cfg, prev_layers: int):
         super().__init__()
         self.cfg = cfg
 
@@ -188,18 +179,47 @@ class TransformerBlock(nn.Module):
         self.attn = Attention(cfg)
         self.ln2 = LayerNorm(cfg)
         self.mlp = MLP(cfg)
-    
-    def forward(self, resid_pre):
-        # resid_pre [batch, position, d_model]
-        normalized_resid_pre = self.ln1(resid_pre)
+
+        for p in self.parameters():
+            p.requires_grad = False
+
+        prev_nodes = (cfg.n_heads + 1) * prev_layers + 1
+        edge_mask_attentions_init = torch.ones((prev_nodes, cfg.n_heads))
+        self.edge_mask_attentions = torch.nn.Parameter(edge_mask_attentions_init, requires_grad=True)
+
+        edge_mask_mlp_init = torch.ones((prev_nodes + cfg.n_heads, ))
+        self.edge_mask_mlp = torch.nn.Parameter(edge_mask_mlp_init, requires_grad=True)
+
+    def forward(self, resid_pre, means=False):
+
+        # resid_pre [batch, position, d_model, prev_head_idx]
+        masked_residuals = einsum("batch position prev_head_idx d_model, prev_head_idx n_heads -> batch position n_heads d_model", resid_pre, self.edge_mask_attentions)
+        if isinstance(means, torch.Tensor):
+            masked_means = einsum("prev_head_idx d_model, prev_head_idx n_heads -> ", means[:self.edge_mask_attentions.shape[0]], 1 - self.edge_mask_attentions)
+            masked_residuals = masked_residuals + masked_means
+
+        # print(self.edge_mask_attentions)
+        # torch.sum(masked_residuals, dim=2, keepdim=True)
+
+        normalized_resid_pre = self.ln1(masked_residuals, parallel=True)
+        # print(normalized_resid_pre[:,:,0])
+        # print(torch.allclose(normalized_resid_pre[:,:,torch.randperm(normalized_resid_pre.shape[2])],normalized_resid_pre))
+
         attn_out = self.attn(normalized_resid_pre)
-        attn_out = torch.sum(attn_out, dim=2)
-        resid_mid = resid_pre + attn_out
+
+        # self.saved_output = attn_out
+
+        residual = torch.cat((resid_pre, attn_out), dim=2)
+
+        masked_mlp_residual = einsum("batch position prev_head_idx d_model, prev_head_idx -> batch position d_model", residual, self.edge_mask_mlp)
         
-        normalized_resid_mid = self.ln2(resid_mid)
+        normalized_resid_mid = self.ln2(masked_mlp_residual)
         mlp_out = self.mlp(normalized_resid_mid)
-        resid_post = resid_mid + mlp_out
-        return resid_post
+        mlp_out = einops.rearrange(mlp_out, "batch position d_model -> batch position 1 d_model")
+
+        residual = torch.cat((residual, mlp_out), dim=2)
+
+        return residual
 
 """## Unembedding"""
 
@@ -225,67 +245,90 @@ class DemoTransformer(nn.Module):
         self.cfg = cfg
         self.embed = Embed(cfg)
         self.pos_embed = PosEmbed(cfg)
-        self.blocks = nn.ModuleList([TransformerBlock(cfg) for _ in range(cfg.n_layers)])
         self.ln_final = LayerNorm(cfg)
         self.unembed = Unembed(cfg)
+        for p in self.parameters():
+            p.requires_grad = False
+
+        self.blocks = nn.ModuleList([TransformerBlock(cfg, i) for i in range(cfg.n_layers)])
+        total_nodes = (cfg.n_heads + 1) * cfg.n_layers + 1
+        self.output_mask = torch.nn.Parameter(torch.ones((total_nodes,)), requires_grad=True)
+
     
-    def forward(self, tokens):
+    def forward(self, tokens, means=False, return_states=False):
         # tokens [batch, position]
         embed = self.embed(tokens)
         pos_embed = self.pos_embed(tokens)
         residual = embed + pos_embed
-
-        for block in self.blocks:
-            residual = block(residual)
+        residual = einops.rearrange(residual, "batch position d_model -> batch position 1 d_model")
+        
+        for i, block in enumerate(self.blocks):
+            # print(i)
+            residual = block(residual, means)
             # if hasattr(self,"saved_states"):
             #     self.saved_states = torch.cat((self.saved_states, block.saved_output.unsqueeze(0)), dim=0)
             # else:
             #     self.saved_states = block.saved_output.unsqueeze(0)
+        
+        if return_states:
+            return residual
+        
+        residual = einsum("batch position prev_head_idx d_model, prev_head_idx -> batch position d_model", residual, self.output_mask)
         normalized_resid_final = self.ln_final(residual)
         logits = self.unembed(normalized_resid_final)
         # logits have shape [batch, position, logits]
-
-        # with open("saved_states.pkl", "wb") as f:
+        # with open("saved_states_new.pkl", "wb") as f:
         #     pickle.dump(self.saved_states, f)
+        return [logits]
+# %%
 
-        return logits
+def load_gpt2_weights():
+    reference_gpt2 = EasyTransformer.from_pretrained("gpt2-small", fold_ln=False, center_unembed=False, center_writing_weights=False)
+    with open("gpt2_weights.pkl", "wb") as f:
+        pickle.dump(reference_gpt2.state_dict(), f)
+
 
 # %%
-"""# Try it out!"""
-
-demo_gpt2 = DemoTransformer(Config(debug=False))
-demo_gpt2.load_state_dict(reference_gpt2.state_dict(), strict=False)
-demo_gpt2.cuda()
-
-"""Take a test string - the intro paragraph of today's featured Wikipedia article. Let's calculate the loss!"""
-
-test_string = """Mini scule is a species of microhylid frog endemic to Madagascar that was described in 2019. The scientific name of the species refers to its size, being a pun on the word minuscule. It is very small, measuring only 8.4 to 10.8 mm (0.33 to 0.43 in) in snout–vent length. It has bronze underparts with a brown groin and back of the thigh, cream upperparts with brown flecking, a dark brown side of the head, and a red iris. On the hind feet, the first toe is absent and the second and fifth toes are strongly reduced. The frog is known only from the Sainte Luce Reserve, where it inhabits areas with deep leaf litter near semi-permanent water bodies. Specimens of frogs from Mandena, the Vohimena mountains, the southern Anosy Mountains, and Tsitongambarika may also be of this species. Along with Mini mum and Mini ature, the other two species in its genus, it received media attention when first described due to the wordplay in its scientific name. (Full article...)"""
-
-test_tokens = reference_gpt2.to_tokens(test_string).cuda()
-demo_logits = demo_gpt2(test_tokens)
-
-def lm_cross_entropy_loss(logits, tokens):
-    # Measure next token loss
-    # Logits have shape [batch, position, d_vocab]
-    # Tokens have shape [batch, position]
-    log_probs = logits.log_softmax(dim=-1)
-    pred_log_probs = log_probs[:, :-1].gather(dim=-1, index=tokens[:, 1:].unsqueeze(-1)).squeeze(-1)
-    return -pred_log_probs.mean()
-loss = lm_cross_entropy_loss(demo_logits, test_tokens)
-print(loss)
-print("Loss as average prob", (-loss).exp())
-print("Loss as 'uniform over this many variables'", (loss).exp())
-print("Uniform loss over the vocab", math.log(demo_gpt2.cfg.d_vocab))
+def load_demo_gpt2():
+    with open("gpt2_weights.pkl", "rb") as f:
+        gpt2_weights = pickle.load(f)
+    demo_gpt2 = DemoTransformer(Config(debug=False))
+    demo_gpt2.load_state_dict(gpt2_weights, strict=False)
+    demo_gpt2.cuda()
+    return demo_gpt2
 
 # %%
 
-"""We can also greedily generate text:"""
+# """Take a test string - the intro paragraph of today's featured Wikipedia article. Let's calculate the loss!"""
 
-test_string = "Breaking News: President Trump has been impeached by the House of Representatives for abuse of power and obstruction of Congress. The vote was 230 to 197, with 10 Republicans joining all Democrats in voting to impeach. The president is now only the third in American history to be impeached, and the first to be impeached twice. The House will now send the articles of impeachment to the Senate, where a trial will be held to determine whether to remove the president from office. The Senate is expected to begin the trial on"
-for i in tqdm.tqdm(range(100)):
-    test_tokens = reference_gpt2.to_tokens(test_string).cuda()
-    demo_logits = demo_gpt2(test_tokens)
-    test_string += reference_gpt2.tokenizer.decode(demo_logits[-1, -1].argmax())
-print(test_string)
+# model = demo_gpt2
+
+# test_string = """Mini scule is a species of microhylid frog endemic to Madagascar that was described in 2019. The scientific name of the species refers to its size, being a pun on the word minuscule. It is very small, measuring only 8.4 to 10.8 mm (0.33 to 0.43 in) in snout–vent length. It has bronze underparts with a brown groin and back of the thigh, cream upperparts with brown flecking, a dark brown side of the head, and a red iris. On the hind feet, the first toe is absent and the second and fifth toes are strongly reduced. The frog is known only from the Sainte Luce Reserve, where it inhabits areas with deep leaf litter near semi-permanent water bodies. Specimens of frogs from Mandena, the Vohimena mountains, the southern Anosy Mountains, and Tsitongambarika may also be of this species. Along with Mini mum and Mini ature, the other two species in its genus, it received media attention when first described due to the wordplay in its scientific name. (Full article...)"""
+
+# test_tokens = reference_gpt2.to_tokens(test_string).cuda()
+# demo_logits = demo_gpt2(test_tokens)
+
+# def lm_cross_entropy_loss(logits, tokens):
+#     # Measure next token loss
+#     # Logits have shape [batch, position, d_vocab]
+#     # Tokens have shape [batch, position]
+#     log_probs = logits.log_softmax(dim=-1)
+#     pred_log_probs = log_probs[:, :-1].gather(dim=-1, index=tokens[:, 1:].unsqueeze(-1)).squeeze(-1)
+#     return -pred_log_probs.mean()
+# loss = lm_cross_entropy_loss(demo_logits, test_tokens)
+# print(loss)
+# print("Loss as average prob", (-loss).exp())
+# print("Loss as 'uniform over this many variables'", (loss).exp())
+# print("Uniform loss over the vocab", math.log(demo_gpt2.cfg.d_vocab))
+
+# # %% 
+# """We can also greedily generate text:"""
+
+# test_string = "Breaking News: President Trump has been impeached by the House of Representatives for abuse of power and obstruction of Congress. The vote was 230 to 197, with 10 Republicans joining all Democrats in voting to impeach. The president is now only the third in American history to be impeached, and the first to be impeached twice. The House will now send the articles of impeachment to the Senate, where a trial will be held to determine whether to remove the president from office. The Senate is expected to begin the trial on"
+# for i in tqdm.tqdm(range(100)):
+#     test_tokens = reference_gpt2.to_tokens(test_string).cuda()
+#     demo_logits = demo_gpt2(test_tokens)
+#     test_string += reference_gpt2.tokenizer.decode(demo_logits[-1, -1].argmax())
+# print(test_string)
 
 # %%

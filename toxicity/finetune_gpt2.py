@@ -1,7 +1,11 @@
+"""
+Finetunes GPT-2 against toxic comments, using eq. 4 from the paper.
+"""
+
 # %%
 
 from transformers import GPT2Tokenizer, GPT2LMHeadModel
-from main import prepare_demo, retrieve_toxic_data, retrieve_owt_data, evaluate_sequence_loss, toxic_samples_test
+from toxicity.utils import prepare_demo, retrieve_toxic_data, retrieve_owt_data, evaluate_sequence_loss, toxic_samples_test
 from torch.optim import AdamW
 from tqdm import tqdm
 import matplotlib.pyplot as plt
@@ -407,7 +411,7 @@ demo_gpt2.cuda()
 #
 #  %%
 
-from main import toxic_samples 
+from toxicity.utils import toxic_samples 
 
 
 samples = [
@@ -423,7 +427,7 @@ for sample in samples:
 
 # %%
 
-from main import retrieve_owt_data
+from toxicity.utils import retrieve_owt_data
 # %%
 owt_loader = retrieve_owt_data(batch_size=1, ctx_length = model.config.n_ctx)
 # print a sequence 
