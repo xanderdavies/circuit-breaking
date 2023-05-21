@@ -4,7 +4,7 @@ Max Li, Xander Davies, Max Nadeau
 The repository is split into `mnist` and `toxicity` folders, correspondingt to the two experimental settings described in the paper.
 
 For the `toxicity` setting:
-- `toxicity/toxic_data_for_eval.py` extracts toxic samples from the [4chan dataset](https://arxiv.org/abs/2001.07487) and stores them in the `toxicity/data` folder. 
+- `toxicity/data.py` extracts toxic samples from the [4chan dataset](https://arxiv.org/abs/2001.07487) and stores them in the `toxicity/data` folder. 
 - `toxicity/compute_means.py` computes the mean of the GPT-2 embeddings for a [10k sample of OpenWebText](https://huggingface.co/datasets/NeelNanda/pile-10k).
 - `toxicity/evaluation.py` evaluates the original, ablated, and fine-tuned model on the OWT dataset.
 - `toxicity/finetune_gpt2.py` finetunes GPT-2 against toxic comments, using eq. 4 from the paper.

@@ -6,7 +6,8 @@ implementing targeted ablation per Section 3 of the paper.
 # %%
 from transformer import load_demo_gpt2
 from transformers import GPT2Tokenizer
-from toxicity.utils import infer_batch_with_owt, prepare_demo, retrieve_toxic_data, retrieve_owt_data
+from data import retrieve_toxic_data, retrieve_owt_data
+from inference import infer_batch_with_owt, prepare_demo
 from torch.utils.data import DataLoader
 from torch.optim import AdamW
 import torch
@@ -119,65 +120,4 @@ with open("masked_gpt2_mean_ablation_vwhat.pkl", "wb") as f:
 # %%
 """We can now plot a loss curve!"""
 
-px.line(y=losses, x=np.arange(len(losses))*(model.cfg.n_ctx * batch_size), labels={"y":"Loss", "x":"Tokens"}, title="Training curve for my tiny demo model!")
-
-
-# %%
-# from transformer import demo_gpt2, reference_gpt2, Config, DemoTransformer, lm_cross_entropy_loss
-# from tqdm import tqdm
-# import torch
-# from easy_transformer.utils import tokenize_and_concatenate
-# import datasets
-# import plotly.express as px
-# import numpy as np
-
-# batch_size = 8
-# num_epochs = 1
-# max_steps = 1000
-# log_every = 10
-# lr = 1e-3
-# weight_decay = 1e-2
-# model_cfg = Config(debug=False, d_model=256, n_heads=4, d_head=64, d_mlp=1024, n_layers=2, n_ctx=256, d_vocab=reference_gpt2.cfg.d_vocab)
-
-# dataset = datasets.load_dataset("NeelNanda/pile-10k", split="train")
-# print(dataset)
-# print(dataset[0]['text'][:100])
-# tokens_dataset = tokenize_and_concatenate(dataset, reference_gpt2.tokenizer, streaming=False, max_length=model_cfg.n_ctx, column_name="text", add_bos_token=True, num_proc=4)
-# data_loader = torch.utils.data.DataLoader(tokens_dataset, batch_size=batch_size, shuffle=True, num_workers=4, pin_memory=True)
-
-# """## Create Model
-
-# """
-
-# model = DemoTransformer(model_cfg)
-# model.cuda()
-
-# """## Create Optimizer
-# We use AdamW - it's a pretty standard optimizer.
-# """
-
-# optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
-
-# """## Run Training Loop
-
-# """
-
-# losses = []
-# print("Number of batches:", len(data_loader))
-# for epoch in range(num_epochs):
-#     for c, batch in tqdm.tqdm(enumerate(data_loader)):
-#         tokens = batch['tokens'].cuda()
-#         logits = model(tokens)
-#         loss = lm_cross_entropy_loss(logits, tokens)
-#         loss.backward()
-#         optimizer.step()
-#         optimizer.zero_grad()
-#         losses.append(loss.item())
-#         if c % log_every == 0:
-#             print(f"Step: {c}, Loss: {loss.item():.4f}")
-#         if c > max_steps:
-#             break
-
-# """We can now plot a loss curve!"""
-
-# px.line(y=losses, x=np.arange(len(losses))*(model_cfg.n_ctx * batch_size), labels={"y":"Loss", "x":"Tokens"}, title="Training curve for my tiny demo model!")
+# px.line(y=losses, x=np.arange(len(losses))*(model.cfg.n_ctx * batch_size), labels={"y":"Loss", "x":"Tokens"}, title="Training curve for my tiny demo model!")

@@ -5,7 +5,7 @@ Computes the mean of the GPT2 embeddings for the OWT dataset.
 
 # %%
 
-from toxicity.utils import retrieve_owt_data
+from data import retrieve_owt_data
 from transformer import load_demo_gpt2
 from tqdm import tqdm
 import torch

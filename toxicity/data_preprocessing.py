@@ -121,7 +121,7 @@ plt.title("Distribution of Toxicity Scores")
 
 # %%
 
-train_set, test_set = get_data(toxicity_scores, 100, toxicity_range=[.9, 1], num_test_samples=1000)
+train_set, test_set = get_data(toxicity_scores, 1000, toxicity_range=[.9, 1], num_test_samples=2000)
 
 plt.hist([x[1] for x in train_set], bins=100)
 plt.title("Distribution of Toxicity Scores in Training Set")
@@ -158,4 +158,43 @@ with open('/home/ubuntu/circuitbreakers/clean/data/test.pkl', 'wb') as f:
 with open('/home/ubuntu/circuitbreakers/clean/data/eval_uniform.pkl', 'wb') as f:
     pickle.dump(eval_uniform, f)
 
+# %%
+from inference import generate_no_hf
+from detoxify import Detoxify
+
+def filter_toxic_data(model, tokenizer, toxic_prompts, samples=100, file_name="train_filtered", threshold=0.5, max_length=30, toxicity_batch_size=100):
+    model.eval()
+    with torch.no_grad():
+        model_completions = generate_no_hf(model, tokenizer, toxic_prompts, max_length=max_length, temperature=0, return_new_only=True)
+        toxic_scorer = Detoxify('original')
+        filtered_data = []
+
+        batches = (len(model_completions) + toxicity_batch_size - 1) // toxicity_batch_size
+        for i in range(batches):
+            start_batch = i * toxicity_batch_size
+            end_batch = min((i + 1) * toxicity_batch_size, len(model_completions))
+            
+
+
+    idx = 0
+    while len(filtered_data) < samples:
+        if idx >= len(model_completions):
+            print(f"NOTE: only produced {idx} toxic-completion samples")
+        filtered_data.append()
+
+    filtered_data = [(toxic_prompts[i], model_completions[i], score) for i, score in enumerate(tqdm(toxic_scorer.predict(model_completions)['toxicity'])) if score > threshold]
+    with open(f"data/{file_name}.pkl", "wb") as f:
+        pickle.dump(filtered_data[:samples] if samples >= len(filtered_data) else filtered_data, f)
+
+# %%
+from models import model, tokenizer
+
+with open('/home/ubuntu/circuitbreakers/clean/data/train.pkl', 'rb') as f:
+    train_set = pickle.load(f)
+
+with open('/home/ubuntu/circuitbreakers/clean/data/test.pkl', 'rb') as f:
+    test_set = pickle.load(f)
+
+filter_toxic_data(model, tokenizer, [t[2] for t in train_set])
+filter_toxic_data(model, tokenizer, [t[2] for t in test_set], samples=500, file_name="test_filtered")
 # %%
