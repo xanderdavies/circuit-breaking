@@ -5,7 +5,7 @@ implementing targeted ablation per Section 3 of the paper.
 
 # %%
 from transformer import load_demo_gpt2
-from transformers import GPT2Tokenizer
+from models import tokenizer
 from data import retrieve_toxic_data, retrieve_owt_data
 from inference import infer_batch_with_owt, prepare_demo
 from torch.utils.data import DataLoader
@@ -18,8 +18,6 @@ from itertools import cycle
 
 # %%
 model = load_demo_gpt2()
-tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
-tokenizer.pad_token_id = tokenizer.eos_token_id
 
 toxic_batch_size = 5
 owt_batch_size = 5

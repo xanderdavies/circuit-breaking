@@ -83,37 +83,34 @@ def generate_text(model, tokenizer, prompt, max_length=20, temperature=0):
     output = model.generate(input_ids, temperature=temperature, max_new_tokens=max_length)
     return tokenizer.decode(output[0], skip_special_tokens=True)
 
+def generate_from_tokens(model, tokenizer, input_ids, max_length=50, temperature=0, attention_mask=None, return_new_only=True):
+    orig_len = input_ids.shape[1]
+    for _ in tqdm(range(max_length)):
+        if attention_mask is None:
+            out = model(input_ids)[0]
+        out = model(input_ids, attention_mask=attention_mask)[0]
+        logits = out[:, -1, :]
+
+        if temperature == 0:
+            next_token = torch.argmax(logits, dim=-1, keepdim=True)
+        else:
+            logits /= temperature
+            probs = torch.softmax(logits, dim=-1)
+            next_token = torch.multinomial(probs, num_samples=1).squeeze(dim=0)
+        # next_token = torch.multinomial(probs, num_samples=1).squeeze()
+
+        input_ids = torch.cat([input_ids,next_token], dim=-1)
+        attention_mask = torch.cat([attention_mask, torch.ones((attention_mask.shape[0], 1)).to(DEVICE)], dim=-1)
+    if return_new_only:
+        return tokenizer.batch_decode(input_ids[:,orig_len:], skip_special_tokens=True)
+    return tokenizer.batch_decode(input_ids, skip_special_tokens=True)
+
 # batched
-def generate_no_hf(model, tokenizer, prompts, max_length=50, temperature=0, return_new_only=True, batch_size=BATCH_SIZE_INFERENCE):
-    batches = (len(prompts) + BATCH_SIZE_INFERENCE - 1) // BATCH_SIZE_INFERENCE
-    output = []
-
-    for i in range(batches):
-        start_batch = i * batch_size
-        end_batch = min((i + 1) * batch_size, len(prompts))
-        prompts_batch = tokenizer(prompts[start_batch:end_batch], return_tensors='pt', padding=True).to(DEVICE)
-        input_ids = prompts_batch['input_ids']
-        attention_mask = prompts_batch['attention_mask']
-        orig_len = input_ids.shape[1]
-
-        for _ in tqdm(range(max_length)):
-            out = model(input_ids, attention_mask=attention_mask)[0]
-            logits = out[:, -1, :]
-
-            if temperature == 0:
-                next_token = torch.argmax(logits, dim=-1, keepdim=True)
-            else:
-                logits /= temperature
-                probs = torch.softmax(logits, dim=-1)
-                next_token = torch.multinomial(probs, num_samples=1).squeeze(dim=0)
-            # next_token = torch.multinomial(probs, num_samples=1).squeeze()
-
-            input_ids = torch.cat([input_ids,next_token], dim=-1)
-            attention_mask = torch.cat([attention_mask, torch.ones((attention_mask.shape[0], 1)).to(DEVICE)], dim=-1)
-        if return_new_only:
-            output.extend(tokenizer.batch_decode(input_ids[:,orig_len:], skip_special_tokens=True))
-        output.extend(tokenizer.batch_decode(input_ids, skip_special_tokens=True))
-    return output
+def generate_no_hf(model, tokenizer, prompts, max_length=50, temperature=0, return_new_only=True):
+    prompts_batch = tokenizer(prompts, return_tensors='pt', padding=True).to(DEVICE)
+    input_ids = prompts_batch['input_ids']
+    attention_mask = prompts_batch['attention_mask']
+    return generate_from_tokens(model, tokenizer, input_ids, max_length, temperature, attention_mask, return_new_only)
 
 # "non"-batched (data is still batched, but it's not batched model evaluation)
 def generate_no_hf_new(model, tokenizer, prompts, max_length=50, temperature=0, return_new_only=True):

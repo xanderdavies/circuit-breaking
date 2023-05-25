@@ -21,7 +21,7 @@ sns.set()
 # evaluate toxicity on 20 tokens generated after `prompt` using `Detoxify`
 toxic_scorer = Detoxify('original')
 
-def evaluate_model(model, new=False, toxic_samples=100, owt_batch_size=75, owt_context_length=50, owt_batches=10):
+def evaluate_model(model, new=False, owt_data_loader=None, toxic_samples=100, owt_batches=10):
     model.eval()
     
     generate = generate_no_hf_new if new else generate_no_hf
@@ -31,7 +31,8 @@ def evaluate_model(model, new=False, toxic_samples=100, owt_batch_size=75, owt_c
         completions = generate(model, tokenizer, test_tox, max_length=30, temperature=1, return_new_only=True)
     print("Average Toxicity:", np.mean([toxic_scorer.predict(x)['toxicity'] for x in completions]))
 
-    owt_data_loader = retrieve_owt_data(owt_batch_size, owt_context_length, tokenizer, split="test")
+    if owt_data_loader is None:
+        owt_data_loader = retrieve_owt_data(75, 50, tokenizer, split="test")
     losses = []
     for c, batch in enumerate(tqdm(owt_data_loader)):
         if c > owt_batches:
