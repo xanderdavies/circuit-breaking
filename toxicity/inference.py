@@ -9,11 +9,12 @@ from einops import repeat
 from models import DEVICE
 
 criterion = torch.nn.CrossEntropyLoss()
+itemized_criterion = torch.nn.CrossEntropyLoss(reduction='none')
 BATCH_SIZE_INFERENCE = 100
 
 # %%
 
-def prepare_demo(tokenizer, batch_size, demo="", device="cuda"):
+def prepare_fixed_demo(tokenizer, batch_size, demo="", device="cuda"):
     # first, encode the demos
     demo = tokenizer(demo, return_tensors="pt").input_ids.to(device)
     # remove batch dimension 
@@ -24,10 +25,10 @@ def prepare_demo(tokenizer, batch_size, demo="", device="cuda"):
     demos = repeat(demo, "l -> b l", b=batch_size).long()
     return demos
 
-def infer_batch(model, criterion, batch, batch_size, demos, device="cuda"):
-
+def infer_batch(model, criterion, batch, batch_size, demos, device=DEVICE, itemized=False):
     # cast the entire batch tensor to torch.long
-    batch = batch.long()
+    demos = demos.long().to(device)
+    batch = batch.long().to(device)
 
     # remove start token 
     batch = batch[:, 1:]
@@ -38,13 +39,11 @@ def infer_batch(model, criterion, batch, batch_size, demos, device="cuda"):
         demos = demos[:batch.shape[0]]
     input = torch.cat([demos, batch], dim=1)
 
-    # generate the output
     out = model(input)[0]  # 0 is the logits
 
-    return evaluate_sequence_loss(out, input, criterion, demos.shape[1])
+    return evaluate_sequence_loss(out, input, criterion, demos.shape[1], itemized=itemized)
 
-
-def infer_batch_with_owt(model, criterion, toxic_batch, owt_batch, batch_size, demos, means=False, device="cuda"):
+def infer_batch_with_owt(model, criterion, toxic_batch, owt_batch, batch_size, demos, device="cuda"):
     # encode the batch
     # toxic_batch = tokenizer(toxic_batch, return_tensors="pt", padding=True).input_ids.to(device)
 
@@ -65,16 +64,22 @@ def infer_batch_with_owt(model, criterion, toxic_batch, owt_batch, batch_size, d
     # print(input.shape, input.dtype)
 
     # generate the output
-    out = model(input, means=means)[0]  # 0 is the logits
+    out = model(input)[0]  # 0 is the logits
 
-    return evaluate_sequence_loss(out[:toxic_batch.shape[0]], batch[:toxic_batch.shape[0]], criterion, demos.shape[1]), evaluate_sequence_loss(out[toxic_batch.shape[0]:], batch[toxic_batch.shape[0]:], criterion, demos.shape[1])
+    return evaluate_sequence_loss(out[:toxic_batch.shape[0]], input[:toxic_batch.shape[0]], criterion, demos.shape[1]), evaluate_sequence_loss(out[toxic_batch.shape[0]:], batch[toxic_batch.shape[0]:], criterion, demos.shape[1])
 
-def evaluate_sequence_loss(logits, batch, criterion, demo_len=0):
+def evaluate_sequence_loss(logits, batch, criterion, demo_len=0, itemized=False):
     # get the logits for all tokens after the last demo
-    logits = logits[:, demo_len:-1].flatten(0,1)
+    logits = logits[:, demo_len:-1]
 
     # get the target labels by shifting the input batch to the left by one
-    target_labels = batch[:, demo_len+1:].long().flatten()
+    target_labels = batch[:, demo_len+1:].long()
+
+    if itemized is False:
+        logits = logits.flatten(0,1)
+        target_labels = target_labels.flatten()
+    else:
+        logits = logits.permute(0,2,1)
     
     return criterion(logits, target_labels)
 
@@ -83,12 +88,14 @@ def generate_text(model, tokenizer, prompt, max_length=20, temperature=0):
     output = model.generate(input_ids, temperature=temperature, max_new_tokens=max_length)
     return tokenizer.decode(output[0], skip_special_tokens=True)
 
-def generate_from_tokens(model, tokenizer, input_ids, max_length=50, temperature=0, attention_mask=None, return_new_only=True):
+def generate_from_tokens(model, input_ids, max_length=50, temperature=0, attention_mask=None, return_new_only=True):
+    input_ids = input_ids.long()
     orig_len = input_ids.shape[1]
     for _ in tqdm(range(max_length)):
         if attention_mask is None:
             out = model(input_ids)[0]
-        out = model(input_ids, attention_mask=attention_mask)[0]
+        else:
+            out = model(input_ids, attention_mask=attention_mask)[0]
         logits = out[:, -1, :]
 
         if temperature == 0:
@@ -100,17 +107,19 @@ def generate_from_tokens(model, tokenizer, input_ids, max_length=50, temperature
         # next_token = torch.multinomial(probs, num_samples=1).squeeze()
 
         input_ids = torch.cat([input_ids,next_token], dim=-1)
-        attention_mask = torch.cat([attention_mask, torch.ones((attention_mask.shape[0], 1)).to(DEVICE)], dim=-1)
+        if attention_mask is not None:
+            attention_mask = torch.cat([attention_mask, torch.ones((attention_mask.shape[0], 1)).to(DEVICE)], dim=-1)
     if return_new_only:
-        return tokenizer.batch_decode(input_ids[:,orig_len:], skip_special_tokens=True)
-    return tokenizer.batch_decode(input_ids, skip_special_tokens=True)
+        return input_ids[:,orig_len:]
+    return input_ids
 
 # batched
 def generate_no_hf(model, tokenizer, prompts, max_length=50, temperature=0, return_new_only=True):
     prompts_batch = tokenizer(prompts, return_tensors='pt', padding=True).to(DEVICE)
     input_ids = prompts_batch['input_ids']
     attention_mask = prompts_batch['attention_mask']
-    return generate_from_tokens(model, tokenizer, input_ids, max_length, temperature, attention_mask, return_new_only)
+    completions = generate_from_tokens(model, tokenizer, input_ids, max_length, temperature, attention_mask, return_new_only)
+    return tokenizer.batch_decode(completions, skip_special_tokens=True)
 
 # "non"-batched (data is still batched, but it's not batched model evaluation)
 def generate_no_hf_new(model, tokenizer, prompts, max_length=50, temperature=0, return_new_only=True):

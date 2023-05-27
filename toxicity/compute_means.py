@@ -6,7 +6,7 @@ Computes the mean of the GPT2 embeddings for the OWT dataset.
 # %%
 
 from data import retrieve_owt_data
-from transformer import load_demo_gpt2
+from models import load_demo_gpt2, tokenizer
 from tqdm import tqdm
 import torch
 
@@ -14,7 +14,7 @@ import torch
 batch_size = 50
 ctx_length = 50
 model = load_demo_gpt2()
-data_loader = retrieve_owt_data(batch_size, ctx_length)
+data_loader = retrieve_owt_data(batch_size)
 
 # %%
 
@@ -36,7 +36,7 @@ means = compute_means(data_loader)
 # %%
 
 import pickle 
-with open('gpt2_means.pkl', 'wb') as f:
+with open('data/gpt2_means.pkl', 'wb') as f:
     pickle.dump(means, f)
 
 # %%

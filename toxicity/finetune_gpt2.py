@@ -4,7 +4,7 @@ Finetunes GPT-2 against toxic comments, using eq. 4 from the paper.
 
 # %%
 from models import DEVICE, tokenizer, model
-from data import retrieve_toxic_data, retrieve_owt_data
+from data import retrieve_toxic_data, retrieve_owt_data, CONTEXT_LENGTH
 from torch.optim import AdamW
 from tqdm import tqdm
 import matplotlib.pyplot as plt
@@ -20,14 +20,13 @@ sns.set()
 BATCH_SIZE = 32
 LOG_EVERY = 50
 LR = 1e-5
-CONTEXT_LEN = 50
 WEIGHT_DECAY = 0
 
-train_loader_toxic = retrieve_toxic_data(batch_size=BATCH_SIZE//2, ctx_length=CONTEXT_LEN, tokenizer=tokenizer, split="train")
-train_loader_owt = retrieve_owt_data(batch_size=BATCH_SIZE//2, ctx_length = CONTEXT_LEN, tokenizer=tokenizer, split="train")
+train_loader_toxic = retrieve_toxic_data(batch_size=BATCH_SIZE//2, ctx_length=CONTEXT_LENGTH, tokenizer=tokenizer, split="train")
+train_loader_owt = retrieve_owt_data(batch_size=BATCH_SIZE//2, split="train")
 
-test_loader_toxic = retrieve_toxic_data(batch_size=BATCH_SIZE//2, ctx_length = CONTEXT_LEN, tokenizer=tokenizer, split="test")
-test_loader_owt = retrieve_owt_data(batch_size=BATCH_SIZE//2, ctx_length = CONTEXT_LEN, tokenizer=tokenizer, split="test")
+test_loader_toxic = retrieve_toxic_data(batch_size=BATCH_SIZE//2, ctx_length = CONTEXT_LENGTH, tokenizer=tokenizer, split="test")
+test_loader_owt = retrieve_owt_data(batch_size=BATCH_SIZE//2, split="test")
 
 # we use cycles to speed things up (don't iterate through all of owt at every epoch)
 train_owt_cycle = itertools.cycle(train_loader_owt)

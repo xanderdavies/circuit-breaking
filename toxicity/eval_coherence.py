@@ -4,7 +4,7 @@ Then converts the edge mask to text (useful for diagrams).
 """
 
 # %%
-from inference import infer_batch, prepare_demo
+from inference import infer_batch, prepare_fixed_demo
 from data import retrieve_owt_data, toxic_samples_test
 from models import DEVICE, tokenizer, model, import_finetuned_model, import_ablated_model
 import torch
@@ -31,7 +31,7 @@ threshold = 0.5
 tox_loss_threshold = 20
 
 # %%
-owt_data_loader = retrieve_owt_data(owt_batch_size, context_length, tokenizer, split="test")
+owt_data_loader = retrieve_owt_data(owt_batch_size, split="test")
 # %%
 orig_losses = []
 finetuned_losses = []
@@ -39,7 +39,7 @@ ablated_losses = []
 for c, batch in enumerate(tqdm(owt_data_loader)):
     if c > 10:
         break
-    demos = prepare_demo(tokenizer, owt_batch_size, demo="").to(DEVICE)
+    demos = prepare_fixed_demo(tokenizer, owt_batch_size, demo="").to(DEVICE)
     batch = batch['tokens'].to(DEVICE)
     with torch.no_grad():
         loss_orig = infer_batch(model, batch, owt_batch_size, demos)

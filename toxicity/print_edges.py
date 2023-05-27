@@ -1,9 +1,13 @@
 # %%
 from models import import_ablated_model
 import torch
+import pickle
 
 # %%
-model_ablate = import_ablated_model('3')
+with open("data/gpt2_means.pkl", "rb") as f:
+    means = pickle.load(f)[0][0]
+
+model_ablate = import_ablated_model('3', means)
 
 mask_weights = []
 for p in model_ablate.parameters():

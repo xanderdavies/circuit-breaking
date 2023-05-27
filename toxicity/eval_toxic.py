@@ -2,7 +2,7 @@
 
 from models import DEVICE, tokenizer, model, import_finetuned_model, import_ablated_model
 from data import retrieve_toxic_data, retrieve_owt_data, toxic_samples_test
-from inference import prepare_demo, evaluate_sequence_loss, generate_no_hf, generate_no_hf_new
+from inference import prepare_fixed_demo, evaluate_sequence_loss, generate_no_hf, generate_no_hf_new
 from torch.optim import AdamW
 from tqdm import tqdm
 import matplotlib.pyplot as plt

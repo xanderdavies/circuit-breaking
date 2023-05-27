@@ -12,9 +12,8 @@ import torch
 import torch.nn as nn
 import numpy as np
 import math
-from easy_transformer.utils import get_corner, gelu_new, tokenize_and_concatenate
+from easy_transformer.utils import gelu_new
 import tqdm.auto as tqdm
-from easy_transformer import EasyTransformer
 
 @dataclass
 class Config:
@@ -195,7 +194,7 @@ class TransformerBlock(nn.Module):
         # resid_pre [batch, position, d_model, prev_head_idx]
         masked_residuals = einsum("batch position prev_head_idx d_model, prev_head_idx n_heads -> batch position n_heads d_model", resid_pre, self.edge_mask_attentions)
         if isinstance(means, torch.Tensor):
-            masked_means = einsum("prev_head_idx d_model, prev_head_idx n_heads -> ", means[:self.edge_mask_attentions.shape[0]], 1 - self.edge_mask_attentions)
+            masked_means = einsum("prev_head_idx d_model, prev_head_idx n_heads -> n_heads d_model", means[:self.edge_mask_attentions.shape[0]], 1 - self.edge_mask_attentions)
             masked_residuals = masked_residuals + masked_means
 
         # print(self.edge_mask_attentions)
@@ -240,7 +239,7 @@ class Unembed(nn.Module):
 """## Full Transformer"""
 
 class DemoTransformer(nn.Module):
-    def __init__(self, cfg):
+    def __init__(self, cfg, means):
         super().__init__()
         self.cfg = cfg
         self.embed = Embed(cfg)
@@ -253,9 +252,9 @@ class DemoTransformer(nn.Module):
         self.blocks = nn.ModuleList([TransformerBlock(cfg, i) for i in range(cfg.n_layers)])
         total_nodes = (cfg.n_heads + 1) * cfg.n_layers + 1
         self.output_mask = torch.nn.Parameter(torch.ones((total_nodes,)), requires_grad=True)
-
+        self.means = means
     
-    def forward(self, tokens, means=False, return_states=False):
+    def forward(self, tokens, return_states=False):
         # tokens [batch, position]
         embed = self.embed(tokens)
         pos_embed = self.pos_embed(tokens)
@@ -264,7 +263,7 @@ class DemoTransformer(nn.Module):
         
         for i, block in enumerate(self.blocks):
             # print(i)
-            residual = block(residual, means)
+            residual = block(residual, self.means)
             # if hasattr(self,"saved_states"):
             #     self.saved_states = torch.cat((self.saved_states, block.saved_output.unsqueeze(0)), dim=0)
             # else:
@@ -280,22 +279,6 @@ class DemoTransformer(nn.Module):
         # with open("saved_states_new.pkl", "wb") as f:
         #     pickle.dump(self.saved_states, f)
         return [logits]
-# %%
-
-def load_gpt2_weights():
-    reference_gpt2 = EasyTransformer.from_pretrained("gpt2-small", fold_ln=False, center_unembed=False, center_writing_weights=False)
-    with open("gpt2_weights.pkl", "wb") as f:
-        pickle.dump(reference_gpt2.state_dict(), f)
-
-
-# %%
-def load_demo_gpt2():
-    with open("gpt2_weights.pkl", "rb") as f:
-        gpt2_weights = pickle.load(f)
-    demo_gpt2 = DemoTransformer(Config(debug=False))
-    demo_gpt2.load_state_dict(gpt2_weights, strict=False)
-    demo_gpt2.cuda()
-    return demo_gpt2
 
 # %%
 

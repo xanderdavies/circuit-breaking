@@ -4,7 +4,6 @@ import datasets
 import torch
 from einops import rearrange
 from torch.utils.data import DataLoader
-from easy_transformer.utils import tokenize_and_concatenate
 from torch.utils.data import random_split
 from inference import generate_no_hf
 from detoxify import Detoxify
@@ -12,6 +11,9 @@ from detoxify import Detoxify
 # %%
 TRAIN_SAMPLES = 100
 TEST_SAMPLES = 1000
+CONTEXT_LENGTH = 50
+FILTER_DEMO_LEN = 50
+FILTER_GENERATED_LEN = 30
 
 with open('data/train.pkl', 'rb') as f:
     toxic_train = pickle.load(f)
@@ -49,6 +51,27 @@ def tokenize_and_concatenate_list(text_samples, tokenizer, seq_len):
     tokens = torch.cat([prefix, tokens], axis=1)
     return tokens
 
+def retrieve_toxic_filtered_data(batch_size, split="train"):
+    with open(f"data/{split}_filtered_prompts.pkl", "rb") as f:
+        train_prompts = pickle.load(f)
+    with open(f"data/{split}_filtered_completions.pkl", "rb") as f:
+        train_completions = pickle.load(f)
+    loader = DataLoader(torch.cat((train_prompts, train_completions), dim=1), batch_size=batch_size, shuffle=split=="train")
+    return loader
+
+def retrieve_toxic_data_low_loss(batch_size, split="train"):
+    with open(f"data/{split}_low_loss.pkl", "rb") as f:
+        prompts = pickle.load(f)
+    loader = DataLoader(prompts, batch_size=batch_size, shuffle=split=="train")
+    return loader
+
+def retrieve_toxic_filtered_examples(tokenizer, split="train"):
+    with open(f"data/{split}_filtered_prompts.pkl", "rb") as f:
+        train_prompts = pickle.load(f)
+    with open(f"data/{split}_filtered_completions.pkl", "rb") as f:
+        train_completions = pickle.load(f)
+    print(tokenizer.batch_decode(torch.cat((train_prompts, train_completions), dim=1)))
+
 def retrieve_toxic_data(batch_size, ctx_length, tokenizer, from_saved=False, split="train"):
     
     if split == "train":
@@ -70,19 +93,10 @@ def retrieve_toxic_train_val(batch_size, ctx_length, tokenizer, val_perc=0.2):
     val_loader = DataLoader(val, batch_size=batch_size, shuffle=False)
     return train_loader, val_loader
 
-def retrieve_owt_data(batch_size, ctx_length, tokenizer, split="train", from_saved=False):
-    dataset = datasets.load_dataset("NeelNanda/pile-10k", split="train")
-    if split == "train":
-        # use 80% of the data
-        dataset = dataset.select(range(int(0.8*len(dataset))))
-    elif split == "test":
-        # use 20% of the data
-        dataset = dataset.select(range(int(0.8*len(dataset)), len(dataset)))
-        print(len(dataset))
-    else:
-        raise ValueError("split must be either train or test")
-    tokens_dataset = tokenize_and_concatenate(dataset, tokenizer, streaming=False, max_length=ctx_length, column_name="text", add_bos_token=True, num_proc=4)
-    data_loader = DataLoader(tokens_dataset, batch_size=batch_size, shuffle=True, num_workers=4, pin_memory=True)
+def retrieve_owt_data(batch_size, split="train"):
+    with open(f"data/owt_{split}.pkl", "rb") as f:
+        dataset = pickle.load(f)
+    data_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=4, pin_memory=True)
     return data_loader
 
 # %%
